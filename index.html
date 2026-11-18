@@ -1,0 +1,638 @@
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pixel Adventure</title>
+<style>
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    background: #17152b;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    font-family: monospace;
+    overflow: hidden;
+}
+
+.game {
+    text-align: center;
+    width: 100%;
+}
+
+h1 {
+    color: #fff;
+    margin-bottom: 12px;
+    font-size: 25px;
+    letter-spacing: 3px;
+    text-shadow: 3px 3px #e33b36;
+}
+
+.hud {
+    color: white;
+    margin-bottom: 10px;
+    font-size: 16px;
+}
+
+canvas {
+    width: min(960px, 96vw);
+    height: auto;
+    aspect-ratio: 16 / 9;
+    border: 5px solid #fff;
+    border-radius: 5px;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    background: #63adff;
+    box-shadow: 0 0 25px #000;
+}
+
+.info {
+    color: white;
+    margin-top: 12px;
+    font-size: 14px;
+}
+</style>
+</head>
+
+<body>
+
+<div class="game">
+    <h1>PIXEL ADVENTURE</h1>
+
+    <div class="hud">
+        <span id="score">MONEDAS: 0</span>
+        &nbsp; | &nbsp;
+        <span id="lives">VIDAS: 3</span>
+    </div>
+
+    <canvas id="game" width="320" height="180"></canvas>
+
+    <div class="info">
+        ← → Mover &nbsp; | &nbsp; ESPACIO Saltar
+    </div>
+</div>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+ctx.imageSmoothingEnabled = false;
+
+const W = 320;
+const H = 180;
+const T = 16;
+
+let camera = 0;
+let score = 0;
+let lives = 3;
+let frame = 0;
+let gameOver = false;
+
+const keys = {};
+
+document.addEventListener("keydown", e => {
+    keys[e.code] = true;
+    if (["Space", "ArrowUp", "ArrowLeft", "ArrowRight"].includes(e.code))
+        e.preventDefault();
+});
+
+document.addEventListener("keyup", e => {
+    keys[e.code] = false;
+});
+
+// MAPA DEL NIVEL
+const map = Array.from({length: 12}, () =>
+    Array(90).fill(".")
+);
+
+// Suelo
+for (let x = 0; x < 90; x++) {
+    map[10][x] = "G";
+    map[11][x] = "G";
+}
+
+// Plataformas y bloques
+function block(x, y, type) {
+    map[y][x] = type;
+}
+
+block(8, 7, "?");
+block(9, 7, "B");
+block(10, 7, "?");
+block(17, 6, "?");
+block(18, 6, "B");
+block(26, 7, "B");
+block(27, 7, "?");
+block(28, 7, "B");
+block(38, 6, "?");
+block(46, 7, "B");
+block(47, 7, "B");
+
+// Tuberías
+function pipe(x, height) {
+    for (let y = 10-height; y < 10; y++) {
+        map[y][x] = "P";
+        map[y][x+1] = "P";
+    }
+}
+pipe(13, 2);
+pipe(22, 3);
+pipe(34, 2);
+pipe(42, 3);
+pipe(55, 2);
+
+// Huecos
+for (let x of [20, 21, 32, 33, 50, 51]) {
+    map[10][x] = ".";
+    map[11][x] = ".";
+}
+
+// PERSONAJE
+const player = {
+    x: 30,
+    y: 100,
+    w: 13,
+    h: 16,
+    vx: 0,
+    vy: 0,
+    speed: 1.5,
+    jump: -5.8,
+    grounded: false,
+    direction: 1,
+    animation: 0,
+    invincible: 0
+};
+
+// SPRITES PIXEL ART
+// M = rojo, B = azul, C = piel, W = blanco,
+// K = negro, S = marrón
+const marioFrames = [
+[
+"......MMMM......",
+".....MMMMMM.....",
+".....MMMMMMMM...",
+".....CCCCCMM....",
+".....CCCCCCMM...",
+"......KKKCCC....",
+"...MMMMMMMM.....",
+"..MMMMMMMMMM....",
+"..MMMBMMMM......",
+"..MMMMMMMM......",
+"...BBBBBB.......",
+"..BBBBBBBB......",
+"..BBBBBBBB......",
+"..SS.BB.SS......",
+"..SS....SS......",
+"................"
+],
+[
+"......MMMM......",
+".....MMMMMM.....",
+".....MMMMMMMM...",
+".....CCCCCMM....",
+".....CCCCCCMM...",
+"......KKKCCC....",
+"...MMMMMMMM.....",
+"..MMMMMMMMMM....",
+"..MMMBMMMM......",
+"..MMMMMMMM......",
+"...BBBBBB.......",
+"..BBBBBBBB......",
+"..BBBBBBBB......",
+"...SSBBBBSS.....",
+"...SS....SS.....",
+"................"
+]
+];
+
+const colors = {
+    M: "#e52521",
+    B: "#1454b5",
+    C: "#ffbd80",
+    W: "#ffffff",
+    K: "#25152a",
+    S: "#793c1e"
+};
+
+function drawSprite(sprite, x, y, flip = false) {
+    for (let row = 0; row < sprite.length; row++) {
+        for (let col = 0; col < sprite[row].length; col++) {
+            const color = colors[sprite[row][col]];
+            if (color) {
+                ctx.fillStyle = color;
+                const px = flip ? x + 15-col : x+col;
+                ctx.fillRect(px, y+row, 1, 1);
+            }
+        }
+    }
+}
+
+// ENEMIGOS
+const enemies = [
+    {x: 180, y: 144, vx: -0.5, alive: true},
+    {x: 390, y: 144, vx: -0.5, alive: true},
+    {x: 610, y: 144, vx: -0.5, alive: true},
+    {x: 800, y: 144, vx: -0.5, alive: true}
+];
+
+const goombaSprite = [
+"....MMMMMMMM....",
+"...MMMMMMMMMM...",
+"..MMMMMMMMMMMM..",
+".MMMMMMMMMMMMMM.",
+".MMKKMMMMMMKKMM.",
+"MMMMKKMMMMKKMMMM",
+"MMMMMMMMMMMMMMMM",
+".MMMMMMMMMMMMMM.",
+"..MMMMMMMMMMMM..",
+"...MMMMMMMMMM...",
+"...SSSS..SSSS...",
+"..SSSS....SSSS.."
+];
+
+// MONEDAS
+let coins = [
+    {x: 150, y: 90, collected:false},
+    {x: 175, y: 90, collected:false},
+    {x: 275, y: 90, collected:false},
+    {x: 440, y: 80, collected:false},
+    {x: 720, y: 95, collected:false},
+    {x: 860, y: 90, collected:false}
+];
+
+// COLISIONES
+function solid(tx, ty) {
+    if (ty < 0 || ty >= 12 || tx < 0 || tx >= 90) return false;
+    return map[ty][tx] !== ".";
+}
+
+function collision(x, y, w, h) {
+    let points = [
+        [x, y],
+        [x+w-1, y],
+        [x, y+h-1],
+        [x+w-1, y+h-1]
+    ];
+
+    return points.some(([px, py]) =>
+        solid(Math.floor(px/T), Math.floor(py/T))
+    );
+}
+
+function movePlayer() {
+    if (gameOver) return;
+
+    player.vx = 0;
+
+    if (keys.ArrowRight || keys.KeyD) {
+        player.vx = player.speed;
+        player.direction = 1;
+    }
+
+    if (keys.ArrowLeft || keys.KeyA) {
+        player.vx = -player.speed;
+        player.direction = -1;
+    }
+
+    if ((keys.Space || keys.ArrowUp || keys.KeyW) &&
+        player.grounded) {
+        player.vy = player.jump;
+        player.grounded = false;
+    }
+
+    player.vy += 0.25;
+    if (player.vy > 5) player.vy = 5;
+
+    player.x += player.vx;
+
+    if (collision(player.x, player.y, player.w, player.h)) {
+        player.x -= player.vx;
+    }
+
+    player.y += player.vy;
+    player.grounded = false;
+
+    if (collision(player.x, player.y, player.w, player.h)) {
+        player.y -= player.vy;
+
+        if (player.vy > 0) player.grounded = true;
+
+        player.vy = 0;
+    }
+
+    if (player.y > H + 20) loseLife();
+
+    if (player.invincible > 0) player.invincible--;
+
+    if (player.vx !== 0) player.animation++;
+}
+
+// FONDO
+function drawBackground() {
+    ctx.fillStyle = "#65baff";
+    ctx.fillRect(0, 0, W, H);
+
+    // NUBES
+    for (let i = 0; i < 12; i++) {
+        let x = (i*90 - camera*0.35) % 390;
+        if (x < -40) x += 390;
+
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(x+5, 20+(i%3)*12, 24, 8);
+        ctx.fillRect(x, 24+(i%3)*12, 34, 8);
+        ctx.fillRect(x+9, 16+(i%3)*12, 14, 8);
+    }
+
+    // MONTAÑAS
+    for (let i = 0; i < 9; i++) {
+        let x = i*75-camera*0.55;
+
+        ctx.fillStyle = "#27994c";
+        ctx.beginPath();
+        ctx.moveTo(x, 144);
+        ctx.lineTo(x+38, 65);
+        ctx.lineTo(x+76, 144);
+        ctx.fill();
+
+        ctx.fillStyle = "#79d36a";
+        ctx.fillRect(x+29, 84, 8, 8);
+        ctx.fillRect(x+21, 100, 8, 8);
+        ctx.fillRect(x+45, 100, 8, 8);
+    }
+
+    // ARBUSTOS
+    for (let i = 0; i < 14; i++) {
+        let x = i*65-camera;
+        x = ((x % 380)+380)%380;
+
+        ctx.fillStyle = "#078b37";
+        ctx.fillRect(x, 139, 34, 9);
+        ctx.fillRect(x+5, 133, 10, 8);
+        ctx.fillRect(x+17, 129, 10, 13);
+    }
+}
+
+// BLOQUES
+function drawBlock(type, x, y) {
+    if (type === "G") {
+        ctx.fillStyle = "#a94f1c";
+        ctx.fillRect(x, y, 16, 16);
+
+        ctx.fillStyle = "#d87a30";
+        ctx.fillRect(x, y, 15, 2);
+        ctx.fillRect(x, y, 2, 16);
+
+        ctx.fillStyle = "#743313";
+        ctx.fillRect(x, y+7, 16, 2);
+        ctx.fillRect(x+7, y, 2, 7);
+        ctx.fillRect(x+3, y+9, 2, 7);
+    }
+
+    if (type === "B") {
+        ctx.fillStyle = "#a94719";
+        ctx.fillRect(x, y, 16, 16);
+
+        ctx.fillStyle = "#e48a42";
+        ctx.fillRect(x+1, y+1, 14, 2);
+        ctx.fillRect(x+1, y+8, 14, 2);
+
+        ctx.fillStyle = "#713013";
+        ctx.fillRect(x+7, y+3, 2, 5);
+        ctx.fillRect(x+3, y+11, 2, 4);
+        ctx.fillRect(x+11, y+11, 2, 4);
+    }
+
+    if (type === "?") {
+        ctx.fillStyle = "#b66a08";
+        ctx.fillRect(x, y, 16, 16);
+
+        ctx.fillStyle = "#ffcf24";
+        ctx.fillRect(x+2, y+2, 12, 12);
+
+        ctx.fillStyle = "#fff17c";
+        ctx.fillRect(x+3, y+2, 10, 2);
+        ctx.fillRect(x+2, y+3, 2, 10);
+
+        ctx.fillStyle = "#bd7200";
+        ctx.font = "bold 12px monospace";
+        ctx.fillText("?", x+4, y+12);
+    }
+
+    if (type === "P") {
+        ctx.fillStyle = "#087c26";
+        ctx.fillRect(x, y, 16, 16);
+
+        ctx.fillStyle = "#20c94b";
+        ctx.fillRect(x+2, y, 5, 16);
+
+        ctx.fillStyle = "#00631e";
+        ctx.fillRect(x+12, y, 4, 16);
+
+        ctx.fillStyle = "#43df62";
+        ctx.fillRect(x, y, 16, 3);
+    }
+}
+
+function drawWorld() {
+    for (let y=0; y<12; y++) {
+        for (let x=0; x<90; x++) {
+            let type = map[y][x];
+            if (type === ".") continue;
+
+            let sx = x*T-camera;
+            let sy = y*T;
+
+            if (sx < -16 || sx > W) continue;
+
+            drawBlock(type, sx, sy);
+        }
+    }
+}
+
+// MONEDAS ANIMADAS
+function drawCoins() {
+    coins.forEach(coin => {
+        if (coin.collected) return;
+
+        let x = coin.x-camera;
+        if (x < -10 || x > W+10) return;
+
+        let width = Math.max(3, Math.abs(Math.sin(frame*0.12))*9);
+
+        ctx.fillStyle = "#a85d00";
+        ctx.fillRect(x-width/2, coin.y, width, 12);
+
+        ctx.fillStyle = "#ffdc24";
+        ctx.fillRect(x-width/2+1, coin.y+1, Math.max(1,width-2), 10);
+
+        ctx.fillStyle = "#fff49b";
+        ctx.fillRect(x-width/2+2, coin.y+2, 2, 3);
+    });
+}
+
+// ENEMIGOS
+function drawEnemies() {
+    enemies.forEach(enemy => {
+        if (!enemy.alive) return;
+
+        let x = enemy.x-camera;
+
+        if (x < -20 || x > W+20) return;
+
+        ctx.fillStyle = "#ffffff";
+        drawSprite(goombaSprite.map(row =>
+            row.replaceAll("M","M").replaceAll("S","S")
+        ), x, enemy.y-12);
+
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(x+4, enemy.y-3, 3, 3);
+        ctx.fillRect(x+10, enemy.y-3, 3, 3);
+    });
+}
+
+// ACTUALIZAR ENEMIGOS
+function updateEnemies() {
+    enemies.forEach(enemy => {
+        if (!enemy.alive) return;
+
+        enemy.x += enemy.vx;
+
+        let tx = Math.floor((enemy.x + (enemy.vx < 0 ? 0 : 15))/T);
+        let ty = Math.floor((enemy.y)/T);
+
+        if (!solid(tx, ty+1) || solid(tx, ty)) {
+            enemy.vx *= -1;
+        }
+
+        if (
+            player.x+player.w > enemy.x &&
+            player.x < enemy.x+16 &&
+            player.y+player.h > enemy.y-12 &&
+            player.y < enemy.y
+        ) {
+            if (player.vy > 0 && player.y+player.h < enemy.y+8) {
+                enemy.alive = false;
+                player.vy = -3;
+                score += 100;
+            } else if (player.invincible === 0) {
+                loseLife();
+            }
+        }
+    });
+}
+
+// RECOGER MONEDAS
+function collectCoins() {
+    coins.forEach(coin => {
+        if (coin.collected) return;
+
+        if (
+            player.x+player.w > coin.x-5 &&
+            player.x < coin.x+5 &&
+            player.y+player.h > coin.y &&
+            player.y < coin.y+12
+        ) {
+            coin.collected = true;
+            score += 50;
+        }
+    });
+
+    document.getElementById("score").textContent =
+        "MONEDAS: " + score;
+}
+
+// VIDAS
+function loseLife() {
+    if (player.invincible > 0) return;
+
+    lives--;
+    document.getElementById("lives").textContent =
+        "VIDAS: " + lives;
+
+    if (lives <= 0) {
+        gameOver = true;
+        return;
+    }
+
+    player.x = Math.max(30, camera+20);
+    player.y = 90;
+    player.vy = 0;
+    player.invincible = 90;
+}
+
+// PERSONAJE
+function drawPlayer() {
+    if (player.invincible > 0 && frame % 8 < 4) return;
+
+    let sprite = marioFrames[
+        player.animation > 0 && player.animation % 12 < 6 ? 1 : 0
+    ];
+
+    drawSprite(
+        sprite,
+        Math.round(player.x-camera),
+        Math.round(player.y),
+        player.direction < 0
+    );
+}
+
+// CÁMARA
+function updateCamera() {
+    camera = Math.max(0, Math.min(
+        player.x-W/2,
+        90*T-W
+    ));
+}
+
+// BUCLE DEL JUEGO
+function update() {
+    if (!gameOver) {
+        movePlayer();
+        updateEnemies();
+        collectCoins();
+        updateCamera();
+    }
+
+    frame++;
+}
+
+function draw() {
+    drawBackground();
+    drawWorld();
+    drawCoins();
+    drawEnemies();
+    drawPlayer();
+
+    if (gameOver) {
+        ctx.fillStyle = "rgba(0,0,0,0.75)";
+        ctx.fillRect(0,0,W,H);
+
+        ctx.fillStyle = "white";
+        ctx.textAlign = "center";
+        ctx.font = "bold 18px monospace";
+        ctx.fillText("GAME OVER", W/2, 80);
+
+        ctx.font = "10px monospace";
+        ctx.fillText("Recarga la página para jugar", W/2, 100);
+        ctx.textAlign = "left";
+    }
+}
+
+function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+}
+
+loop();
+
+</script>
+</body>
+</html>
